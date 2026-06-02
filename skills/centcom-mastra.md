@@ -170,22 +170,9 @@ const approvalPayload = {
 };
 ```
 
-## 5. Log approved and autonomous actions
+## 5. Log autonomous and post-approval actions
 
-After an approved action runs, log the follow-up in the same case. Also log low-risk autonomous actions when support or compliance needs searchable evidence.
-
-```typescript
-await logContro1Action({
-  action: 'mastra.tool_completed',
-  summary: `Completed ${toolId} after approval`,
-  source: { integration: 'mastra', workflow_id: workflowId, run_id: runId },
-  outcome: 'success',
-  correlation_id: runId,
-  in_reply_to: { type: 'request', id: requestId },
-});
-```
-
-For an action that did not need approval:
+Every approval request already stores the human decision in Contro1. Use audit records for low-risk actions that did not need approval, and optionally after an approved action completes if you want to record what your Mastra system actually did next.
 
 ```typescript
 await logContro1Action({
@@ -195,6 +182,19 @@ await logContro1Action({
   outcome: 'success',
   severity: 'info',
   correlation_id: runId,
+});
+```
+
+For a post-approval action result, link the audit record back to the approval request:
+
+```typescript
+await logContro1Action({
+  action: 'mastra.tool_completed',
+  summary: `Completed ${toolId} after approval`,
+  source: { integration: 'mastra', workflow_id: workflowId, run_id: runId },
+  outcome: 'success',
+  correlation_id: runId,
+  in_reply_to: { type: 'request', id: requestId },
 });
 ```
 
