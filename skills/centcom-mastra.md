@@ -52,29 +52,12 @@ Resume the action only after a verified approved decision. Denials and timeouts 
 
 ## 2. Full production example
 
-A production tool should preview routing, create the request, wait for a signed decision, perform the action, and log what happened:
+A production tool should create the request, wait for a signed decision, and then perform the action:
 
 ```typescript
 async function guardedDeploy(context: { version: string; environment: string }) {
   const runId = process.env.MASTRA_RUN_ID ?? crypto.randomUUID();
   const toolId = 'deploy-release';
-
-  const preview = await fetch(`${process.env.CENTCOM_BASE_URL}/requests/control-map`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${process.env.CENTCOM_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      approval_requirements: { required_roles: ['developer'], required_approvals: 1 },
-      approval_policy: { mode: 'threshold', required_approvals: 1, fail_closed_on_timeout: true },
-      metadata: { integration: 'mastra', tool_id: toolId, run_id: runId },
-    }),
-  }).then((r) => r.json());
-
-  if (!preview.satisfiable) {
-    throw new Error(`No eligible Contro1 reviewer is available: ${preview.warnings?.join(', ')}`);
-  }
 
   const request = await createContro1Request({
     type: 'approval',
@@ -92,25 +75,13 @@ async function guardedDeploy(context: { version: string; environment: string }) 
 
   const result = await deploy(context.version, context.environment);
 
-  await logContro1Action({
-    action: 'mastra.deploy_completed',
-    summary: `Deployed ${context.version} to ${context.environment}`,
-    source: { integration: 'mastra', workflow_id: 'release-deploy', run_id: runId },
-    outcome: 'success',
-    correlation_id: runId,
-    in_reply_to: { type: 'request', id: request.id },
-    metadata: { result },
-  });
-
   return result;
 }
 ```
 
-## 3. Control Map: who can approve right now
+## 3. If routing fails, check who is available
 
-Control Map is a pre-flight routing check. It does not create an approval request. It tells the agent whether the planned approval can be routed right now: mapped roles, current shift capacity, fallback reviewers, quorum, separation of duties, and warnings.
-
-Use it before deploys, vendor payments, customer messaging, bulk data changes, privilege changes, and two-person approval flows.
+Most integrations do not need Control Map in the normal approval path. If a request cannot be routed, times out unexpectedly, or your app wants to show a clear operational error, call Control Map to see who is currently available.
 
 ```typescript
 const preview = await fetch(`${process.env.CENTCOM_BASE_URL}/requests/control-map`, {
@@ -121,14 +92,8 @@ const preview = await fetch(`${process.env.CENTCOM_BASE_URL}/requests/control-ma
   },
   body: JSON.stringify({
     approval_requirements: {
-      required_roles: ['manager', 'developer'],
-      required_approvals: 2,
-    },
-    approval_policy: {
-      mode: 'threshold',
-      required_approvals: 2,
-      separation_of_duties: true,
-      fail_closed_on_timeout: true,
+      required_roles: ['developer'],
+      required_approvals: 1,
     },
     metadata: {
       integration: 'mastra',
@@ -138,16 +103,11 @@ const preview = await fetch(`${process.env.CENTCOM_BASE_URL}/requests/control-ma
   }),
 }).then((r) => r.json());
 
-if (!preview.satisfiable) {
-  throw new Error(`Contro1 routing is not ready: ${preview.warnings?.join(', ') ?? 'unknown reason'}`);
-}
-
-console.log(preview.role_mappings);
-console.log(preview.on_shift_capacity);
-console.log(preview.fallback_reviewers);
+console.log(preview.satisfiable);        // can this request be routed?
+console.log(preview.on_shift_capacity);  // who is currently available?
+console.log(preview.fallback_reviewers); // who can receive fallback routing?
+console.log(preview.warnings);           // why routing may fail
 ```
-
-Cache successful previews briefly for repeated calls in the same workflow. Do not call Control Map on every low-risk tool invocation.
 
 ## 4. Workflow approval pattern
 
