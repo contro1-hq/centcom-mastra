@@ -15,6 +15,7 @@ Use this skill when integrating Contro1 approval workflows into a Mastra codebas
 - Keep low-risk tools autonomous; log them with Contro1 audit records when evidence is required.
 - Use the Mastra run ID or workflow run ID as `correlation_id`.
 - Use the exact tool ID or step ID in `external_request_id` so retries are idempotent.
+- Call Control Map before high-risk approvals to confirm required roles, quorum, separation of duties, and fallback routing are satisfiable.
 - Verify signed Contro1 callbacks before resuming a suspended workflow or executing a delayed action.
 - Treat rejected, cancelled, timed_out, invalid signatures, and unknown request IDs as fail-closed for production actions.
 
@@ -48,6 +49,43 @@ const request = await createContro1Request({
 ```
 
 Resume the action only after a verified approved decision. Denials and timeouts stop the action.
+
+## Control Map before approval
+
+Before creating a high-risk request, preview routing with the same role and approval policy you plan to enforce. Use this before deploys, vendor payments, customer messaging, bulk data changes, privilege changes, and two-person approval flows.
+
+```typescript
+const preview = await fetch(`${process.env.CENTCOM_BASE_URL}/requests/control-map`, {
+  method: 'POST',
+  headers: {
+    Authorization: `Bearer ${process.env.CENTCOM_API_KEY}`,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    approval_requirements: {
+      required_roles: ['manager', 'developer'],
+      required_approvals: 2,
+    },
+    approval_policy: {
+      mode: 'threshold',
+      required_approvals: 2,
+      separation_of_duties: true,
+      fail_closed_on_timeout: true,
+    },
+    metadata: {
+      integration: 'mastra',
+      workflow_id: workflowId,
+      step_id: stepId,
+    },
+  }),
+}).then((r) => r.json());
+
+if (!preview.satisfiable) {
+  throw new Error(`Contro1 routing is not ready: ${preview.warnings?.join(', ') ?? 'unknown reason'}`);
+}
+```
+
+Cache successful previews briefly for repeated calls in the same workflow. Do not call Control Map on every low-risk tool invocation.
 
 ## Workflow approval pattern
 

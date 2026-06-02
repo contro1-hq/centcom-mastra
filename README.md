@@ -19,6 +19,7 @@ Use it when adding Contro1 approval gates to Mastra agents, tools, or workflows.
 ## What this skill helps with
 
 - Creating approval requests before risky Mastra tool calls or workflow steps.
+- Calling Control Map before high-risk approvals to confirm role routing and quorum are satisfiable.
 - Using `external_request_id` for idempotent tool and step review.
 - Using `correlation_id` to keep a Mastra run or workflow timeline together.
 - Handling signed callback verification before resuming execution.
