@@ -28,9 +28,9 @@ CENTCOM_WEBHOOK_SECRET=whsec_your_secret
 CENTCOM_CALLBACK_URL=https://your-app.example.com/webhooks/contro1
 ```
 
-## Tool approval pattern
+## 1. Short example: ask for approval
 
-Wrap destructive Mastra tools before they execute:
+Put this at the top of a risky Mastra tool before the real action runs:
 
 ```typescript
 const request = await createContro1Request({
@@ -50,9 +50,67 @@ const request = await createContro1Request({
 
 Resume the action only after a verified approved decision. Denials and timeouts stop the action.
 
-## Control Map before approval
+## 2. Full production example
 
-Before creating a high-risk request, preview routing with the same role and approval policy you plan to enforce. Use this before deploys, vendor payments, customer messaging, bulk data changes, privilege changes, and two-person approval flows.
+A production tool should preview routing, create the request, wait for a signed decision, perform the action, and log what happened:
+
+```typescript
+async function guardedDeploy(context: { version: string; environment: string }) {
+  const runId = process.env.MASTRA_RUN_ID ?? crypto.randomUUID();
+  const toolId = 'deploy-release';
+
+  const preview = await fetch(`${process.env.CENTCOM_BASE_URL}/requests/control-map`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.CENTCOM_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      approval_requirements: { required_roles: ['developer'], required_approvals: 1 },
+      approval_policy: { mode: 'threshold', required_approvals: 1, fail_closed_on_timeout: true },
+      metadata: { integration: 'mastra', tool_id: toolId, run_id: runId },
+    }),
+  }).then((r) => r.json());
+
+  if (!preview.satisfiable) {
+    throw new Error(`No eligible Contro1 reviewer is available: ${preview.warnings?.join(', ')}`);
+  }
+
+  const request = await createContro1Request({
+    type: 'approval',
+    question: `Deploy ${context.version} to ${context.environment}?`,
+    context,
+    callback_url: process.env.CENTCOM_CALLBACK_URL,
+    required_role: 'developer',
+    external_request_id: `mastra:${runId}:${toolId}:${context.version}`,
+    correlation_id: runId,
+    metadata: { integration: 'mastra', tool_id: toolId },
+  });
+
+  const decision = await waitForSignedContro1Decision(request.id);
+  if (!decision.response?.approved) throw new Error('Deploy rejected by operator');
+
+  const result = await deploy(context.version, context.environment);
+
+  await logContro1Action({
+    action: 'mastra.deploy_completed',
+    summary: `Deployed ${context.version} to ${context.environment}`,
+    source: { integration: 'mastra', workflow_id: 'release-deploy', run_id: runId },
+    outcome: 'success',
+    correlation_id: runId,
+    in_reply_to: { type: 'request', id: request.id },
+    metadata: { result },
+  });
+
+  return result;
+}
+```
+
+## 3. Control Map: who can approve right now
+
+Control Map is a pre-flight routing check. It does not create an approval request. It tells the agent whether the planned approval can be routed right now: mapped roles, current shift capacity, fallback reviewers, quorum, separation of duties, and warnings.
+
+Use it before deploys, vendor payments, customer messaging, bulk data changes, privilege changes, and two-person approval flows.
 
 ```typescript
 const preview = await fetch(`${process.env.CENTCOM_BASE_URL}/requests/control-map`, {
@@ -83,11 +141,15 @@ const preview = await fetch(`${process.env.CENTCOM_BASE_URL}/requests/control-ma
 if (!preview.satisfiable) {
   throw new Error(`Contro1 routing is not ready: ${preview.warnings?.join(', ') ?? 'unknown reason'}`);
 }
+
+console.log(preview.role_mappings);
+console.log(preview.on_shift_capacity);
+console.log(preview.fallback_reviewers);
 ```
 
 Cache successful previews briefly for repeated calls in the same workflow. Do not call Control Map on every low-risk tool invocation.
 
-## Workflow approval pattern
+## 4. Workflow approval pattern
 
 For deterministic workflows, insert an approval step between prepare and execute:
 
@@ -108,9 +170,9 @@ const approvalPayload = {
 };
 ```
 
-## Audit logging
+## 5. Log approved and autonomous actions
 
-After an approved action runs, log the follow-up in the same case:
+After an approved action runs, log the follow-up in the same case. Also log low-risk autonomous actions when support or compliance needs searchable evidence.
 
 ```typescript
 await logContro1Action({
@@ -122,6 +184,31 @@ await logContro1Action({
   in_reply_to: { type: 'request', id: requestId },
 });
 ```
+
+For an action that did not need approval:
+
+```typescript
+await logContro1Action({
+  action: 'mastra.search_completed',
+  summary: 'Searched internal docs for refund policy',
+  source: { integration: 'mastra', workflow_id: 'support-agent', run_id },
+  outcome: 'success',
+  severity: 'info',
+  correlation_id: runId,
+});
+```
+
+## 6. Get evidence
+
+Use evidence when compliance or incident review needs proof of what happened.
+
+```typescript
+const evidence = await getContro1(`/requests/${requestId}/evidence`);
+const timeline = await getContro1(`/cases/${runId}`);
+```
+
+- Request evidence shows one reviewed action: context, policy, reviewer, decision, callback, timestamps, and final response.
+- Case timeline shows all approvals and audit records that share the same `correlation_id`.
 
 ## Reference links
 
