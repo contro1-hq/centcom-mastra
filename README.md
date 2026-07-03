@@ -27,4 +27,4 @@ Use it when adding Contro1 approval gates to Mastra agents, tools, or workflows.
 
 ## Security note
 
-Production approvals must go through Contro1 APIs and signed webhooks. MCP or coding-agent skills can help implement and inspect the integration, but they are not the production approval transport.
+Production approvals must go through Contro1 APIs and signed webhooks.
