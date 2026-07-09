@@ -15,7 +15,7 @@ Use this skill when integrating Contro1 approval workflows into a Mastra codebas
 - Keep low-risk tools autonomous; log them with Contro1 audit records when evidence is required.
 - Use the Mastra run ID or workflow run ID as `correlation_id`.
 - Use the exact tool ID or step ID in `external_request_id` so retries are idempotent.
-- Call Control Map before high-risk approvals to confirm required roles, quorum, separation of duties, and fallback routing are satisfiable.
+- Use Control Map when high-risk approvals need a preview for required roles, quorum, separation of duties, and fallback routing.
 - Verify signed Contro1 callbacks before resuming a suspended workflow or executing a delayed action.
 - Treat rejected, cancelled, timed_out, invalid signatures, and unknown request IDs as fail-closed for production actions.
 
