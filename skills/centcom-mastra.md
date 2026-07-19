@@ -33,10 +33,16 @@ CENTCOM_CALLBACK_URL=https://your-app.example.com/webhooks/contro1
 Put this at the top of a risky Mastra tool before the real action runs:
 
 ```typescript
+const { reason, ...toolInputWithoutReason } = toolInput as { reason?: string; [key: string]: unknown };
+
 const request = await createContro1Request({
   type: 'approval',
   question: `Approve ${toolId}?`,
-  context: toolInput,
+  context: {
+    action: { tool: toolId, input: toolInputWithoutReason },
+    machine_observed: { tool_id: toolId, run_id: runId },
+    agent_reported: { justification: reason },
+  },
   callback_url: process.env.CENTCOM_CALLBACK_URL,
   required_role: 'manager',
   external_request_id: `mastra:${runId}:${toolId}`,
@@ -50,19 +56,35 @@ const request = await createContro1Request({
 
 Resume the action only after a verified approved decision. Denials and timeouts stop the action.
 
+## Send context the reviewer can trust
+
+Build the approval `context` inside the Mastra tool, at the point where it receives `toolInput` - not by asking the agent to explain itself in a later step. Three sources feed it: the exact `toolInput` the tool was called with, copied verbatim as a machine-observed fact; the run or trigger that started the agent (the `runId`, or whatever kicked off the request); and the agent's own justification, which is only trustworthy if it rides through the gate with the call itself. Make `reason` a required field on a risky tool's input schema so the agent must produce it as part of the same call Contro1 is reviewing, instead of the tool asking "why" after the fact.
+
+Keep provenance separated inside `context`: verbatim tool input and run facts under `machine_observed`, the model-authored `reason` under `agent_reported`. Two rules follow: `agent_reported` text must never change `required_role`, routing, or which `approval_policy` applies - it only gives the human reviewer color, since a prompt-injected agent can produce a very persuasive justification for a bad tool call. And if a high-risk tool call arrives without its required `reason`, fail closed (reject the call) instead of forwarding a guess to the operator. See https://contro1.com/docs/requests-api for the full pattern.
+
 ## 2. Full production example
 
 A production tool should create the request, wait for a signed decision, and then perform the action:
 
 ```typescript
-async function guardedDeploy(context: { version: string; environment: string }) {
+async function guardedDeploy(context: { version: string; environment: string; reason: string }) {
   const runId = process.env.MASTRA_RUN_ID ?? crypto.randomUUID();
   const toolId = 'deploy-release';
+
+  if (!context.reason) {
+    // Fail closed: a deploy is high-risk, so a missing agent-reported reason is
+    // rejected instead of being sent to a human to guess.
+    throw new Error('guardedDeploy requires a `reason` explaining why this deploy is needed');
+  }
 
   const request = await createContro1Request({
     type: 'approval',
     question: `Deploy ${context.version} to ${context.environment}?`,
-    context,
+    context: {
+      action: { tool: toolId, input: { version: context.version, environment: context.environment } },
+      machine_observed: { tool_id: toolId, run_id: runId },
+      agent_reported: { justification: context.reason },
+    },
     callback_url: process.env.CENTCOM_CALLBACK_URL,
     required_role: 'developer',
     external_request_id: `mastra:${runId}:${toolId}:${context.version}`,
